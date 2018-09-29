@@ -1,0 +1,25 @@
+<?php
+
+/**
+ * @file
+ * Contains tus.module.
+ */
+
+use Drupal\Core\Routing\RouteMatchInterface;
+
+/**
+ * Implements hook_help().
+ */
+function tus_help($route_name, RouteMatchInterface $route_match) {
+  switch ($route_name) {
+    // Main module help for the tus module.
+    case 'help.page.tus':
+      $output = '';
+      $output .= '<h3>' . t('About') . '</h3>';
+      $output .= '<p>' . t('It is highly suggested to use Uppy as your client.') . '</p>';
+      $output .= '<p>' . t('Custom clients must return certain POST values when the upload is complete.  See README for more information.') . '</p>';
+      return $output;
+
+    default:
+  }
+}
