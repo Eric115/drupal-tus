@@ -16,3 +16,4 @@ tus.upload.complete:
   methods: [POST, OPTIONS]
   requirements:
     _permission: 'access tus upload'
+    _format: 'json'
