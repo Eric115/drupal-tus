@@ -45,6 +45,14 @@ class TusServer implements TusServerInterface {
    * @return TusServer
    */
   public function getServer($uploadKey = '', $postData = []) {
+    // Set TUS config cache directory.
+    \TusPhp\Config::set([
+      'file' => [
+        'dir' => drupal_realpath('private://tus') . '/',
+        'name' => 'tus_php.cache',
+      ]
+    ]);
+
     // Initialize TUS server.
     $server = new TusPhp();
     $server->setApiPath('/tus/upload');
