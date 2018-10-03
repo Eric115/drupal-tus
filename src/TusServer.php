@@ -67,6 +67,7 @@ class TusServer implements TusServerInterface {
     // can return the server now.
     $requestMethod = strtolower($server->getRequest()->method());
     $fastReturnMethods = [
+      'get',
       'head',
       'patch',
     ];
