@@ -7,6 +7,8 @@ tus.upload:
   methods: [GET, POST, PATCH, HEAD, OPTIONS, DELETE]
   requirements:
     _permission: 'access tus upload'
+  options:
+    no_cache: TRUE
 
 tus.upload.complete:
   path: 'tus/upload-complete'
@@ -17,3 +19,5 @@ tus.upload.complete:
   requirements:
     _permission: 'access tus upload'
     _format: 'json'
+  options:
+    no_cache: TRUE

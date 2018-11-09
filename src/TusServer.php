@@ -103,7 +103,10 @@ class TusServer implements TusServerInterface {
       throw new HttpException(500, 'Destination file path:' . $destination . ' is not writable');
     }
     // Store Drupal's file URI for saving later.
-    $this->tempStore->set('destination', $destination);
+    $fileName = $postData['name'] ?? $postData['filename'];
+    // Add original encoded base64 name for privateTempStore index.
+    $fileName = base64_encode($fileName);
+    $this->tempStore->set("destination-{$fileName}", $destination);
     // Set the upload directory for TUS.
     $server->setUploadDir(drupal_realpath($destination));
 
@@ -127,7 +130,8 @@ class TusServer implements TusServerInterface {
     }
 
     // Get our destination from tempstore.
-    $destination = $this->tempStore->get('destination');
+    $fileName = base64_encode($postData['file']['name']);
+    $destination = $this->tempStore->get("destination-{$fileName}");
 
     // Create the file entity.
     $file = File::create([
@@ -138,6 +142,12 @@ class TusServer implements TusServerInterface {
       'filesize' => $postData['file']['size'],
     ]);
     $file->save();
+
+    // Create file_managed entry so the file isn't deleted before
+    // containing entity is saved.
+    // @todo Make this an opt-in setting.
+    $fileUsage = \Drupal::service('file.usage');
+    $fileUsage->add($file, 'tus', 'file', $file->id());
 
     $result = [
       'fid' => $file->id(),
