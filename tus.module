@@ -36,7 +36,7 @@ function tus_cron() {
     ->fields('f', ['fid'])
     ->condition('module', 'tus')
     ->condition('count', 0, '>')
-    ->execute();
+    ->execute()->fetchAll();
 
   if (empty($results)) {
     return;
@@ -52,7 +52,7 @@ function tus_cron() {
     ->condition('module', 'tus', '!=')
     ->condition('count', 0, '>')
     ->condition('fid', $fids, 'IN')
-    ->execute();
+    ->execute()->fetchAll();
 
   if (empty($results)) {
     return;
