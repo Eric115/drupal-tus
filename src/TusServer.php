@@ -105,8 +105,8 @@ class TusServer implements TusServerInterface {
     // Store Drupal's file URI for saving later.
     $fileName = $postData['name'] ?? $postData['filename'];
     // Add original encoded base64 name for privateTempStore index.
-    $fileName = base64_encode($fileName);
-    $this->tempStore->set("destination-{$fileName}", $destination);
+    $fileName = substr(base64_encode($fileName), 0, 70);
+    $this->tempStore->set("dest-{$fileName}", $destination);
     // Set the upload directory for TUS.
     $server->setUploadDir(drupal_realpath($destination));
 
@@ -130,8 +130,8 @@ class TusServer implements TusServerInterface {
     }
 
     // Get our destination from tempstore.
-    $fileName = base64_encode($postData['file']['name']);
-    $destination = $this->tempStore->get("destination-{$fileName}");
+    $fileName = substr(base64_encode($postData['file']['name']), 0, 70);
+    $destination = $this->tempStore->get("dest-{$fileName}");
 
     // Create the file entity.
     $file = File::create([
