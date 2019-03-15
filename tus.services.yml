@@ -1,4 +1,4 @@
 services:
   tus.server:
     class: Drupal\tus\TusServer
-    arguments: ['@tempstore.private']
+    arguments: []

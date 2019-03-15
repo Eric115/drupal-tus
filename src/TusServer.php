@@ -3,9 +3,7 @@
 namespace Drupal\tus;
 
 use TusPhp\Tus\Server as TusPhp;
-use Drupal\Core\TempStore\PrivateTempStoreFactory;
 use Drupal\file\Entity\File;
-use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 /**
@@ -14,26 +12,49 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
 class TusServer implements TusServerInterface {
 
   /**
-   * The private_tempstore factory.
-   *
-   * @var \Drupal\Core\TempStore\PrivateTempStoreFactory
-   */
-  protected $tempStore;
-
-  /**
    * Constructs a new TusServer object.
    */
-  public function __construct(PrivateTempStoreFactory $temp_store_factory) {
-    $this->tempStore = $temp_store_factory->get('tus');
+  public function __construct() {
+
   }
 
   /**
-  * {@inheritdoc}
-  */
-  public static function create(ContainerInterface $container) {
-    return new static(
-      $container->get('tempstore.private')
-    );
+   * Determine the Drupal URI for a file based on TUS upload key and meta params
+   * from the upload client.
+   *
+   * @param string $uploadKey
+   *   The TUS upload key.
+   * @param array $fieldInfo
+   *   Params about the entity type, bundle, and field_name.
+   *
+   * @return string
+   *   The intended destination uri for the file.
+   */
+  public function determineDestination($uploadKey, $fieldInfo = []) {
+    $destination = '';
+    // If fieldInfo was not passed, we cannot determine file path.
+    if (empty($fieldInfo)) {
+      throw new HttpException(500, 'Destination file path unknown because field info not sent in client meta.');
+    }
+
+    // Determine TUS uploadDir.
+    $bundleFields = \Drupal::getContainer()->get('entity_field.manager')
+      ->getFieldDefinitions($fieldInfo['entityType'], $fieldInfo['entityBundle']);
+    $fieldDefinition = $bundleFields[$fieldInfo['fieldName']];
+    // Get the field's configured destination directory.
+    $filePath = trim(\Drupal::service('token')->replace($fieldDefinition->getSetting('file_directory')), '/');
+    $destination = $fieldDefinition->getSetting('uri_scheme') . '://';
+    $destination .= $filePath;
+
+    // Add the UploadKey to destination.
+    $destination .= '/' . $uploadKey;
+
+    // Ensure directory creation.
+    if (!file_prepare_directory($destination, FILE_CREATE_DIRECTORY)) {
+      throw new HttpException(500, 'Destination file path:' . $destination . ' is not writable.');
+    }
+
+    return $destination;
   }
 
   /**
@@ -45,6 +66,11 @@ class TusServer implements TusServerInterface {
    * @return TusServer
    */
   public function getServer($uploadKey = '', $postData = []) {
+    // Ensure TUS cache directory exists.
+    $tusCacheDir = 'private://tus';
+    if (!file_prepare_directory($tusCacheDir, FILE_CREATE_DIRECTORY)) {
+      throw new HttpException(500, 'TUS cache folder "private://tus" is not writable.');
+    }
     // Set TUS config cache directory.
     \TusPhp\Config::set([
       'file' => [
@@ -75,38 +101,15 @@ class TusServer implements TusServerInterface {
       return $server;
     }
 
-    // If no post data, we can't proceed.
-    if (empty($postData['entityType'])) {
-      \Drupal::logger('iam')->error('TusServer: getServer() Error, no POST meta returned');
-      return;
-    }
-
-    // Determine TUS uploadDir.
-    $bundleFields = \Drupal::getContainer()->get('entity_field.manager')
-      ->getFieldDefinitions($postData['entityType'], $postData['entityBundle']);
-    $fieldDefinition = $bundleFields[$postData['fieldName']];
-    // Get the field's configured destination directory.
-    $filePath = trim(\Drupal::service('token')->replace($fieldDefinition->getSetting('file_directory')), '/');
-    $destination = $fieldDefinition->getSetting('uri_scheme') . '://';
-    $destination .= $filePath;
-
     // Get uploadKey for directory creation. On POST, it isn't passed, but
     // we need to add the UUID to file directory to ensure we don't
     // concatenate same-file uploads if client key is lost.
     if ($requestMethod == 'post') {
       $uploadKey = $server->getUploadKey();
     }
-    $destination .= '/' . $uploadKey;
 
-    // Ensure directory creation.
-    if (!file_prepare_directory($destination, FILE_CREATE_DIRECTORY)) {
-      throw new HttpException(500, 'Destination file path:' . $destination . ' is not writable');
-    }
-    // Store Drupal's file URI for saving later.
-    $fileName = $postData['name'] ?? $postData['filename'];
-    // Add original encoded base64 name for privateTempStore index.
-    $fileName = substr(base64_encode($fileName), 0, 70);
-    $this->tempStore->set("dest-{$fileName}", $destination);
+    // Get the file destination.
+    $destination = $this->determineDestination($uploadKey, $postData);
     // Set the upload directory for TUS.
     $server->setUploadDir(drupal_realpath($destination));
 
@@ -125,30 +128,54 @@ class TusServer implements TusServerInterface {
   public function uploadComplete($postData = []) {
     // If no post data, we can't proceed.
     if (empty($postData['file'])) {
-      \Drupal::logger('iam')->error('TusServer: uploadComplete() Error, no POST file returned');
-      return [];
+      throw new HttpException(500, 'TUS uploadComplete did not receive file info.');
+    }
+    $fileExists = FALSE;
+
+    // Get UploadKey from Uppy response.
+    $uploadUrlArray = explode('/', $postData['response']['uploadURL']);
+    $uploadKey = array_pop($uploadUrlArray);
+
+    // Get file destination.
+    $destination = $this->determineDestination($uploadKey, $postData['file']['meta']);
+    $fileUri = $destination . '/' .  $postData['file']['name'];
+
+    // Check if the file already exists.  Re-use the existing entity if so.
+    // We can do this because even if the filenames are the same on 2 different
+    // files, the checksum performed by TUS will cause a new uploadKey, and
+    // therefor a new folder and file entity entry.
+    if (file_exists(drupal_realpath($fileUri))) {
+      $fileCheck = \Drupal::entityTypeManager()
+        ->getStorage('file')
+        ->loadByProperties(['uri' => $fileUri]);
+      if (!empty($fileCheck)) {
+        $file = reset($fileCheck);
+        // Mark that the file exists, so we can re-use the entity.
+        $fileExists = TRUE;
+      }
     }
 
-    // Get our destination from tempstore.
-    $fileName = substr(base64_encode($postData['file']['name']), 0, 70);
-    $destination = $this->tempStore->get("dest-{$fileName}");
+    // If the file didn't already exist, create the record now.
+    if (!$fileExists) {
+      // Create the file entity.
+      $file = File::create([
+        'uid'      => \Drupal::currentUser()->id(),
+        'filename' => $postData['file']['name'],
+        'uri'      => $fileUri,
+        'filemime' => $postData['file']['type'],
+        'filesize' => $postData['file']['size'],
+      ]);
+      $file->save();
 
-    // Create the file entity.
-    $file = File::create([
-      'uid' => \Drupal::currentUser()->id(),
-      'filename' => $postData['file']['name'],
-      'uri' => $destination . '/' .  $postData['file']['name'],
-      'filemime' => $postData['file']['type'],
-      'filesize' => $postData['file']['size'],
-    ]);
-    $file->save();
+      // Create file_managed entry so the file isn't deleted before
+      // containing entity is saved.
+      // These entries are deleted in tus_cron if another file_usage is detected.
+      // e.g. once the file is assigned to an entity.
+      $fileUsage = \Drupal::service('file.usage');
+      $fileUsage->add($file, 'tus', 'file', $file->id());
+    }
 
-    // Create file_managed entry so the file isn't deleted before
-    // containing entity is saved.
-    // @todo Make this an opt-in setting.
-    $fileUsage = \Drupal::service('file.usage');
-    $fileUsage->add($file, 'tus', 'file', $file->id());
-
+    // Return a useful result payload for front end clients.
     $result = [
       'fid' => $file->id(),
       'uuid' => $file->uuid(),
@@ -156,6 +183,9 @@ class TusServer implements TusServerInterface {
       'filename' => $file->getFilename(),
       'path' => $file->url(),
     ];
+
+    // Allow modules to alter the response payload.
+    \Drupal::moduleHandler()->alter('tus_upload_complete', $result, $file);
 
     return $result;
   }
