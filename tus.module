@@ -65,5 +65,6 @@ function tus_cron() {
   // Delete any tus file usage if another usage is recorded.
   $results = \Drupal::database()->delete('file_usage')
     ->condition('module', 'tus')
-    ->condition('fid', $otherUsage, 'IN');
+    ->condition('fid', $otherUsage, 'IN')
+    ->execute();
 }
