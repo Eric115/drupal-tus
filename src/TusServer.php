@@ -130,7 +130,8 @@ class TusServer implements TusServerInterface {
     if (empty($postData['file'])) {
       throw new HttpException(500, 'TUS uploadComplete did not receive file info.');
     }
-    $fileExists = FALSE;
+    $fileExists = $fileEntityExists = $addUsage = FALSE;
+    $fileUsage = \Drupal::service('file.usage');
 
     // Get UploadKey from Uppy response.
     $uploadUrlArray = explode('/', $postData['response']['uploadURL']);
@@ -138,41 +139,73 @@ class TusServer implements TusServerInterface {
 
     // Get file destination.
     $destination = $this->determineDestination($uploadKey, $postData['file']['meta']);
-    $fileUri = $destination . '/' .  $postData['file']['name'];
+    $fileName = $postData['file']['name'];
+    $fileUri = $destination . '/' .  $fileName;
 
     // Check if the file already exists.  Re-use the existing entity if so.
     // We can do this because even if the filenames are the same on 2 different
     // files, the checksum performed by TUS will cause a new uploadKey, and
     // therefor a new folder and file entity entry.
     if (file_exists(drupal_realpath($fileUri))) {
-      $fileCheck = \Drupal::entityTypeManager()
-        ->getStorage('file')
-        ->loadByProperties(['uri' => $fileUri]);
-      if (!empty($fileCheck)) {
-        $file = reset($fileCheck);
-        // Mark that the file exists, so we can re-use the entity.
+      $fileExists = TRUE;
+    }
+
+    // Check if we have a file_managed record for the file anywhere.
+    $fileStorage = \Drupal::entityTypeManager()->getStorage('file');
+    $fileQuery = $fileStorage->getQuery();
+
+    // If the current path for this file already exists, we have exact match.
+    if ($fileExists) {
+      $fileQuery->condition('uri', $fileUri);
+    }
+    else {
+      // We can look for this TUS-uuid + filename for the existence of this
+      // file, possibly uploaded for a different field.
+      $fileQuery->condition('uri', "%{$uploadKey}/{$fileName}", 'LIKE');
+      $addUsage = TRUE;
+    }
+
+    $fileCheck = $fileQuery->execute();
+    // If we found the file in database.
+    if (!empty($fileCheck)) {
+      $file = $fileStorage->load(reset($fileCheck));
+      // Mark that the file exists, so we can re-use the entity.
+      $fileEntityExists = TRUE;
+      // Check if this file URI truly exists in path.
+      if (file_exists(drupal_realpath($file->getFileUri()))) {
         $fileExists = TRUE;
       }
     }
 
     // If the file didn't already exist, create the record now.
-    if (!$fileExists) {
+    if ($fileExists && !$fileEntityExists) {
       // Create the file entity.
       $file = File::create([
         'uid'      => \Drupal::currentUser()->id(),
-        'filename' => $postData['file']['name'],
+        'filename' => $fileName,
         'uri'      => $fileUri,
         'filemime' => $postData['file']['type'],
         'filesize' => $postData['file']['size'],
       ]);
       $file->save();
 
-      // Create file_managed entry so the file isn't deleted before
+      // Create file_usage entry so the file isn't deleted before
       // containing entity is saved.
       // These entries are deleted in tus_cron if another file_usage is detected.
       // e.g. once the file is assigned to an entity.
-      $fileUsage = \Drupal::service('file.usage');
       $fileUsage->add($file, 'tus', 'file', $file->id());
+    }
+    elseif (empty($file)) {
+      // Return error.
+      throw new HttpException(406, 'There was an issue uploading this file.');
+    }
+
+    if ($addUsage) {
+      // We need to record new usage, but we don't know the entity ID it is
+      // assigned to, so mark the entity type as module, because 'tus' will be
+      // removed in tus_cron. Leave 'file' as the object so that the link in
+      // file admin list is valid.
+      $fileUsage->add($file, $postData['file']['meta']['entityType'], 'file', $file->id());
     }
 
     // Return a useful result payload for front end clients.
