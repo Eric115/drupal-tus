@@ -19,8 +19,6 @@ function tus_help($route_name, RouteMatchInterface $route_match) {
       $output .= '<p>' . t('It is highly suggested to use Uppy as your client.') . '</p>';
       $output .= '<p>' . t('Custom clients must return certain POST values when the upload is complete.  See README for more information.') . '</p>';
       return $output;
-
-    default:
   }
 }
 
