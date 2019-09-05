@@ -115,9 +115,7 @@ class TusServerController extends ControllerBase {
     // header upload-key on others.
     $uuid = $uuid ?? $request->headers->get('upload-key') ?? '';
     $server = $this->tusServer->getServer($uuid, $metaValues);
-    $response = $server->serve();
-
-    return $response->send();
+    return $server->serve();
   }
 
   /**
