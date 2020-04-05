@@ -5,3 +5,6 @@ tus.settings:
     cache_dir:
       type: string
       label: 'Cache directory'
+    max_upload_size:
+      type: integer
+      label: 'Max upload size'

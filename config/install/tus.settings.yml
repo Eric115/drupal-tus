@@ -1,1 +1,2 @@
 cache_dir: 'private://tus'
+max_upload_size: 100

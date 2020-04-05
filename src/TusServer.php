@@ -157,6 +157,9 @@ class TusServer implements TusServerInterface, ContainerInjectionInterface {
     $server = new Server();
     $server->setApiPath('/tus/upload');
 
+    // Convert the max upload size from MB to bytes for tus.
+    $server->setMaxUploadSize((int)$this->config->get('max_upload_size') * 1048576);
+
     if ($upload_key) {
       $server->setUploadKey($upload_key);
     }
