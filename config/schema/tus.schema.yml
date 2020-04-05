@@ -1,0 +1,7 @@
+tus.settings:
+  type: config_object
+  label: 'TUS config'
+  mapping:
+    scheme:
+      type: string
+      label: 'Cache schema'

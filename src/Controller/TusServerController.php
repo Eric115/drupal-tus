@@ -89,11 +89,11 @@ class TusServerController extends ControllerBase {
    *
    * @param \Symfony\Component\HttpFoundation\Request $request
    *   The current request.
-   *
    * @param string $uuid
    *   UUID for the file being uploaded.
    *
-   * @return TusPhp\Tus\Server response.
+   * @return TusPhp\Tus\Server
+   *   Response.
    */
   public function upload(Request $request, $uuid) {
     $metaValues = [];
