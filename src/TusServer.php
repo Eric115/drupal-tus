@@ -11,7 +11,7 @@ use Drupal\Core\File\FileSystemInterface;
 use Drupal\Core\Utility\Token;
 use Drupal\file\FileUsage\FileUsageInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
-use TusPhp\Tus\Server as TusPhp;
+use TusPhp\Tus\Server;
 use Drupal\file\Entity\File;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
@@ -91,38 +91,8 @@ class TusServer implements TusServerInterface, ContainerInjectionInterface {
   /**
    * {@inheritdoc}
    */
-  public function determineDestination($uploadKey, $fieldInfo = []) {
-    $destination = '';
-    // If fieldInfo was not passed, we cannot determine file path.
-    if (empty($fieldInfo)) {
-      throw new HttpException(500, 'Destination file path unknown because field info not sent in client meta.');
-    }
-
-    // Determine TUS uploadDir.
-    $bundleFields = $this->entityFieldManager
-      ->getFieldDefinitions($fieldInfo['entityType'], $fieldInfo['entityBundle']);
-    $fieldDefinition = $bundleFields[$fieldInfo['fieldName']];
-    // Get the field's configured destination directory.
-    $filePath = trim($this->token->replace($fieldDefinition->getSetting('file_directory')), '/');
-    $destination = $fieldDefinition->getSetting('uri_scheme') . '://';
-    $destination .= $filePath;
-
-    // Add the UploadKey to destination.
-    $destination .= '/' . $uploadKey;
-
-    // Ensure directory creation.
-    if (!$this->fileSystem->prepareDirectory($destination, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS)) {
-      throw new HttpException(500, 'Destination file path:' . $destination . ' is not writable.');
-    }
-
-    return $destination;
-  }
-
-  /**
-   * {@inheritdoc}
-   */
-  public function getServer(string $uploadKey = '', array $postData = []) {
-    $tusCacheDir = ($this->config->get('scheme') ?? 'public://') . 'tus';
+  public function getServer(string $uploadKey = '', array $postData = []): TusServerInterface {
+    $tus_cache_dir = $this->config->get('cache_dir');
 
     // Ensure TUS cache directory exists.
     if (!$this->fileSystem->prepareDirectory($tusCacheDir, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS)) {
@@ -137,7 +107,7 @@ class TusServer implements TusServerInterface, ContainerInjectionInterface {
     ]);
 
     // Initialize TUS server.
-    $server = new TusPhp();
+    $server = new Server();
     $server->setApiPath('/tus/upload');
 
     // Set uploadKey if passed.
@@ -174,9 +144,50 @@ class TusServer implements TusServerInterface, ContainerInjectionInterface {
   }
 
   /**
+   * Determine Drupal URI.
+   *
+   * Determine the Drupal URI for a file based on TUS upload key and meta params
+   * from the upload client.
+   *
+   * @param string $uploadKey
+   *   The TUS upload key.
+   * @param array $fieldInfo
+   *   Params about the entity type, bundle, and field_name.
+   *
+   * @return string
+   *   The intended destination uri for the file.
+   */
+  protected function determineDestination(string $uploadKey, array $fieldInfo): string {
+    $destination = '';
+    // If fieldInfo was not passed, we cannot determine file path.
+    if (empty($fieldInfo)) {
+      throw new HttpException(500, 'Destination file path unknown because field info not sent in client meta.');
+    }
+
+    // Determine TUS uploadDir.
+    $bundleFields = $this->entityFieldManager
+      ->getFieldDefinitions($fieldInfo['entityType'], $fieldInfo['entityBundle']);
+    $fieldDefinition = $bundleFields[$fieldInfo['fieldName']];
+    // Get the field's configured destination directory.
+    $filePath = trim($this->token->replace($fieldDefinition->getSetting('file_directory')), '/');
+    $destination = $fieldDefinition->getSetting('uri_scheme') . '://';
+    $destination .= $filePath;
+
+    // Add the UploadKey to destination.
+    $destination .= '/' . $uploadKey;
+
+    // Ensure directory creation.
+    if (!$this->fileSystem->prepareDirectory($destination, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS)) {
+      throw new HttpException(500, 'Destination file path:' . $destination . ' is not writable.');
+    }
+
+    return $destination;
+  }
+
+  /**
    * {@inheritdoc}
    */
-  public function uploadComplete(array $postData = []) {
+  public function uploadComplete(array $postData = []): array {
     // If no post data, we can't proceed.
     if (empty($postData['file'])) {
       throw new HttpException(500, 'TUS uploadComplete did not receive file info.');

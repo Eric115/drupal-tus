@@ -1,1 +1,1 @@
-scheme: 'public://'
+cache_dir: 'private://tus'

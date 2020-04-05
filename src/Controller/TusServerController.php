@@ -3,11 +3,13 @@
 namespace Drupal\tus\Controller;
 
 use Drupal\Core\Controller\ControllerBase;
+use Drupal\Core\Entity\EntityFieldManagerInterface;
 use Drupal\tus\TusServerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
+use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 use Symfony\Component\Serializer\Encoder\JsonEncoder;
 use Symfony\Component\Serializer\Serializer;
 
@@ -38,12 +40,20 @@ class TusServerController extends ControllerBase {
   protected $serializerFormats = [];
 
   /**
+   * Instance of EntityFieldManager.
+   *
+   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
+   */
+  protected $entityFieldManager;
+
+  /**
    * Constructs a new TusServerController object.
    */
-  public function __construct(TusServerInterface $tus_server, Serializer $serializer, array $serializer_formats) {
+  public function __construct(TusServerInterface $tus_server, Serializer $serializer, array $serializer_formats, EntityFieldManagerInterface $entity_field_manager) {
     $this->tusServer = $tus_server;
     $this->serializer = $serializer;
     $this->serializerFormats = $serializer_formats;
+    $this->entityFieldManager = $entity_field_manager;
   }
 
   /**
@@ -63,7 +73,8 @@ class TusServerController extends ControllerBase {
     return new static(
       $container->get('tus.server'),
       $serializer,
-      $formats
+      $formats,
+      $container->get('entity_field.manager')
     );
   }
 
@@ -102,13 +113,24 @@ class TusServerController extends ControllerBase {
     if (!empty($metadata)) {
       $pieces = explode(',', $metadata);
       foreach ($pieces as $piece) {
-        list($metaName, $metaValue) = explode(' ', $piece);
+        [$metaName, $metaValue] = explode(' ', $piece);
         $metaValues[$metaName] = base64_decode($metaValue);
       }
       // If meta isn't passed from the client, we cannot proceed.
       if (empty($metaValues['entityType'])) {
         throw new BadRequestHttpException('TusServerController: POST metadata missing required entityType.');
       }
+    }
+
+    $bundleFields = $this->entityFieldManager
+      ->getFieldDefinitions($metaValues['entityType'], $metaValues['entityBundle']);
+    $fieldDefinition = $bundleFields[$metaValues['fieldName']];
+
+    // Check the uploaded file type is permitted by field.
+    $allowed_extensions = explode(' ', $fieldDefinition->getSettings()['file_extensions']);
+    $file_type = end(explode('/', $metaValues['filetype']));
+    if (!in_array($file_type, $allowed_extensions, TRUE)) {
+      throw new UnprocessableEntityHttpException('File type is not support for this field.');
     }
 
     // UUID is passed on PATCH and other certain calls, or as the

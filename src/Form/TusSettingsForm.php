@@ -14,18 +14,10 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
 class TusSettingsForm extends ConfigFormBase {
 
   /**
-   * Instance of StreamWrapperManager.
-   *
-   * @var \Drupal\Core\StreamWrapper\StreamWrapperManagerInterface
-   */
-  protected $streamWrapperManager;
-
-  /**
    * Creates an instance of TusSettingsForm.
    */
-  public function __construct(ConfigFactoryInterface $config_factory, StreamWrapperManagerInterface $stream_wrapper_manager) {
+  public function __construct(ConfigFactoryInterface $config_factory) {
     parent::__construct($config_factory);
-    $this->streamWrapperManager = $stream_wrapper_manager;
   }
 
   /**
@@ -33,8 +25,7 @@ class TusSettingsForm extends ConfigFormBase {
    */
   public static function create(ContainerInterface $container) {
     return new static(
-      $container->get('config.factory'),
-      $container->get('stream_wrapper_manager')
+      $container->get('config.factory')
     );
   }
 
@@ -59,17 +50,11 @@ class TusSettingsForm extends ConfigFormBase {
    */
   public function buildForm(array $form, FormStateInterface $form_state) {
     $form = parent::buildForm($form, $form_state);
-    $scheme_options = ['public://' => 'public'];
-
-    if ($this->streamWrapperManager->isValidScheme('private')) {
-      $scheme_options['private://'] = 'private';
-    }
-    $form['scheme'] = [
-      '#type' => 'radios',
-      '#description' => $this->t('File system to store cache'),
-      '#title' => $this->t('File system'),
-      '#options' => $scheme_options,
-      '#default_value' => $this->config('tus.settings')->get('scheme'),
+    $form['cache_dir'] = [
+      '#type' => 'textfield',
+      '#description' => $this->t('Where to store the tus cache on the file system. <br> If unsure, use the default "private://tus"'),
+      '#title' => $this->t('Tus cache directory'),
+      '#default_value' => $this->config('tus.settings')->get('cache_dir'),
       '#required' => TRUE,
     ];
     return parent::buildForm($form, $form_state);
@@ -80,7 +65,6 @@ class TusSettingsForm extends ConfigFormBase {
    */
   public function submitForm(array &$form, FormStateInterface $form_state) {
     parent::submitForm($form, $form_state);
-
     $this->config('tus.settings')
       ->set('scheme', $form_state->getValue('scheme'))
       ->save();
