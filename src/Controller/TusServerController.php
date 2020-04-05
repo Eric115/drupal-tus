@@ -5,17 +5,14 @@ namespace Drupal\tus\Controller;
 use Drupal\Core\Cache\CacheableJsonResponse;
 use Drupal\Core\Controller\ControllerBase;
 use Drupal\Core\Entity\EntityFieldManagerInterface;
-use Drupal\tus\TusServer;
 use Drupal\tus\TusServerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
-use Symfony\Component\Finder\Exception\AccessDeniedException;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 use Symfony\Component\Serializer\Encoder\JsonEncoder;
 use Symfony\Component\Serializer\Serializer;
-use TusPhp\Tus\Server;
 
 /**
  * Class TusServerController.
@@ -160,7 +157,7 @@ class TusServerController extends ControllerBase {
   }
 
   /**
-   * Get an array of meta values from
+   * Get an array of meta values from.
    *
    * @param \Symfony\Component\HttpFoundation\Request $request
    *   The original request.
@@ -189,6 +186,7 @@ class TusServerController extends ControllerBase {
    *
    * @return \Symfony\Component\HttpFoundation\Response
    *   The created file details.
+   *
    * @throws \Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException
    * @throws \Drupal\Component\Plugin\Exception\PluginNotFoundException
    */

@@ -135,7 +135,7 @@ class TusServer implements TusServerInterface, ContainerInjectionInterface {
    * Get a configured instance of Tus Server.
    *
    * @param string $upload_key
-   *  Upload key from tus if available.
+   *   Upload key from tus if available.
    *
    * @return \TusPhp\Tus\Server
    *   Configured instance of Tus server

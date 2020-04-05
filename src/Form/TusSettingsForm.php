@@ -2,32 +2,13 @@
 
 namespace Drupal\tus\Form;
 
-use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Form\ConfigFormBase;
 use Drupal\Core\Form\FormStateInterface;
-use Drupal\Core\StreamWrapper\StreamWrapperManagerInterface;
-use Symfony\Component\DependencyInjection\ContainerInterface;
 
 /**
  * Tus settings form.
  */
 class TusSettingsForm extends ConfigFormBase {
-
-  /**
-   * Creates an instance of TusSettingsForm.
-   */
-  public function __construct(ConfigFactoryInterface $config_factory) {
-    parent::__construct($config_factory);
-  }
-
-  /**
-   * {@inheritdoc}
-   */
-  public static function create(ContainerInterface $container) {
-    return new static(
-      $container->get('config.factory')
-    );
-  }
 
   /**
    * {@inheritdoc}
