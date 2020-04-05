@@ -2,6 +2,9 @@
 
 namespace Drupal\tus;
 
+use TusPhp\Events\TusEvent;
+use TusPhp\Tus\Server;
+
 /**
  * Interface TusServerInterface.
  */
@@ -10,25 +13,22 @@ interface TusServerInterface {
   /**
    * Configure and return TusServer instance.
    *
-   * @param string $uploadKey
+   * @param string $upload_key
    *   The TUS upload key.
-   * @param array $postData
+   * @param array $post_data
    *   Array of file details from TUS client.
    *
-   * @return TusServer
+   * @return \TusPhp\Tus\Server
    *   The TusServer
    */
-  public function getServer(string $uploadKey = '', array $postData = []): TusServerInterface;
+  public function getServer(string $upload_key = '', array $post_data = []): Server;
 
   /**
-   * Create the file in Drupal and send response.
+   * Create the managed file in Drupal.
    *
-   * @param array $postData
-   *   Array of file details from TUS client.
-   *
-   * @return array
-   *   The created file details.
+   * @param \TusPhp\Events\TusEvent $event
+   *   Tus event object.
    */
-  public function uploadComplete(array $postData = []): array;
+  public function uploadComplete(TusEvent $event): void;
 
 }

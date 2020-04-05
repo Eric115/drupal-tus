@@ -54,7 +54,7 @@ class TusSettingsForm extends ConfigFormBase {
       '#type' => 'textfield',
       '#description' => $this->t('Where to store the tus cache on the file system. <br> If unsure, use the default "private://tus"'),
       '#title' => $this->t('Tus cache directory'),
-      '#default_value' => $this->config('tus.settings')->get('cache_dir'),
+      '#default_value' => $this->config('tus.settings')->get('cache_dir') ?? 'private://tus',
       '#required' => TRUE,
     ];
     return parent::buildForm($form, $form_state);
@@ -66,7 +66,7 @@ class TusSettingsForm extends ConfigFormBase {
   public function submitForm(array &$form, FormStateInterface $form_state) {
     parent::submitForm($form, $form_state);
     $this->config('tus.settings')
-      ->set('scheme', $form_state->getValue('scheme'))
+      ->set('cache_dir', $form_state->getValue('cache_dir'))
       ->save();
   }
 
