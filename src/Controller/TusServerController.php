@@ -149,7 +149,8 @@ class TusServerController extends ControllerBase {
 
     // Check the uploaded file type is permitted by field.
     $allowed_extensions = explode(' ', $field_definition->getSettings()['file_extensions']);
-    $file_type = end(explode('/', $meta_values['filetype']));
+    $file_type = explode('/', $meta_values['filetype']);
+    $file_type = end($file_type);
 
     if (!in_array($file_type, $allowed_extensions, TRUE)) {
       throw new UnprocessableEntityHttpException(sprintf('File type "%s" is not supported for this field.', $file_type));
