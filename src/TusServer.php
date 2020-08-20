@@ -2,6 +2,9 @@
 
 namespace Drupal\tus;
 
+use Drupal\Core\Session\AccountProxyInterface;
+use Drupal\tus\Event\TusUploadCompleteEvent;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
 use TusPhp\Config;
 use Drupal\Core\Config\ConfigFactoryInterface;
@@ -72,9 +75,23 @@ class TusServer implements TusServerInterface, ContainerInjectionInterface {
   protected $tusCacheDir;
 
   /**
+   * Instance of AccountProxy.
+   *
+   * @var \Drupal\Core\Session\AccountProxyInterface
+   */
+  protected $currentUser;
+
+  /**
+   * Instance of EventDispatcher.
+   *
+   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
+   */
+  protected $eventDispatcher;
+
+  /**
    * Constructs a new TusServer object.
    */
-  public function __construct(EntityFieldManagerInterface $entity_field_manager, Token $token, FileUsageInterface $file_usage, EntityTypeManagerInterface $entity_type_manager, FileSystemInterface $file_system, ConfigFactoryInterface $config_factory) {
+  public function __construct(EntityFieldManagerInterface $entity_field_manager, Token $token, FileUsageInterface $file_usage, EntityTypeManagerInterface $entity_type_manager, FileSystemInterface $file_system, ConfigFactoryInterface $config_factory, AccountProxyInterface $current_user, EventDispatcherInterface $event_dispatcher) {
     $this->entityFieldManager = $entity_field_manager;
     $this->token = $token;
     $this->fileUsage = $file_usage;
@@ -82,6 +99,8 @@ class TusServer implements TusServerInterface, ContainerInjectionInterface {
     $this->fileSystem = $file_system;
     $this->config = $config_factory->get('tus.settings');
     $this->tusCacheDir = $this->config->get('cache_dir');
+    $this->currentUser = $current_user;
+    $this->eventDispatcher = $event_dispatcher;
 
     if (!$this->fileSystem->prepareDirectory($this->tusCacheDir, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS)) {
       throw new HttpException(500, sprintf('TUS cache folder "%s" is not writable.', $this->tusCacheDir));
@@ -98,7 +117,9 @@ class TusServer implements TusServerInterface, ContainerInjectionInterface {
       $container->get('file.usage'),
       $container->get('entity_type.manager'),
       $container->get('file_system'),
-      $container->get('config.factory')
+      $container->get('config.factory'),
+      $container->get('current_user'),
+      $container->get('event_dispatcher')
     );
   }
 
@@ -241,8 +262,9 @@ class TusServer implements TusServerInterface, ContainerInjectionInterface {
       return;
     }
 
+    /** @var \Drupal\file\FileInterface $file */
     $file = File::create([
-      'uid' => \Drupal::currentUser()->id(),
+      'uid' => $this->currentUser->id(),
       'filename' => $file_name,
       'uri' => $file_path,
       'filemime' => mime_content_type($file_path),
@@ -250,6 +272,10 @@ class TusServer implements TusServerInterface, ContainerInjectionInterface {
     ]);
     $file->save();
     $this->fileUsage->add($file, 'tus', 'file', $file->id());
+
+    // Dispatch an event for other modules to act on.
+    $event = new TusUploadCompleteEvent($file);
+    $this->eventDispatcher->dispatch(TusUploadCompleteEvent::EVENT_NAME, $event);
   }
 
 }
