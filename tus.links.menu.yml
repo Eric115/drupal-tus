@@ -1,0 +1,6 @@
+tus.tus_settings_form:
+  title: 'Configure TUS Uploader'
+  route_name: 'tus.tus_settings_form'
+  description: 'Settings for TUS Uploader'
+  parent: system.admin_config_system
+

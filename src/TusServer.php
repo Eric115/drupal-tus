@@ -2,55 +2,225 @@
 
 namespace Drupal\tus;
 
-use TusPhp\Tus\Server as TusPhp;
+use Drupal\Core\Session\AccountProxyInterface;
+use Drupal\tus\Event\TusUploadCompleteEvent;
+use Symfony\Component\EventDispatcher\EventDispatcherInterface;
+use Symfony\Component\HttpKernel\Exception\UnprocessableEntityHttpException;
+use TusPhp\Config;
+use Drupal\Core\Config\ConfigFactoryInterface;
+use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+use Drupal\Core\Entity\EntityFieldManagerInterface;
+use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\File\FileSystemInterface;
+use Drupal\Core\Utility\Token;
+use Drupal\file\FileUsage\FileUsageInterface;
+use Symfony\Component\DependencyInjection\ContainerInterface;
+use TusPhp\Events\TusEvent;
+use TusPhp\Tus\Server;
 use Drupal\file\Entity\File;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 /**
  * Class TusServer.
  */
-class TusServer implements TusServerInterface {
+class TusServer implements TusServerInterface, ContainerInjectionInterface {
+
+  /**
+   * Instance of entity field manager.
+   *
+   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
+   */
+  protected $entityFieldManager;
+
+  /**
+   * Instance of Token.
+   *
+   * @var \Drupal\Core\Utility\Token
+   */
+  protected $token;
+
+  /**
+   * Instance of FileUsage.
+   *
+   * @var \Drupal\file\FileUsage\FileUsageInterface
+   */
+  protected $fileUsage;
+
+  /**
+   * Instance of EntityTypeManager.
+   *
+   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
+   */
+  protected $entityTypeManager;
+
+  /**
+   * Instance of FileSystem.
+   *
+   * @var \Drupal\Core\File\FileSystemInterface
+   */
+  protected $fileSystem;
+
+  /**
+   * Tus settings config.
+   *
+   * @var \Drupal\Core\Config\ImmutableConfig
+   */
+  protected $config;
+
+  /**
+   * Tus cache directory URI.
+   *
+   * @var string
+   */
+  protected $tusCacheDir;
+
+  /**
+   * Instance of AccountProxy.
+   *
+   * @var \Drupal\Core\Session\AccountProxyInterface
+   */
+  protected $currentUser;
+
+  /**
+   * Instance of EventDispatcher.
+   *
+   * @var \Symfony\Component\EventDispatcher\EventDispatcherInterface
+   */
+  protected $eventDispatcher;
 
   /**
    * Constructs a new TusServer object.
    */
-  public function __construct() {
+  public function __construct(EntityFieldManagerInterface $entity_field_manager, Token $token, FileUsageInterface $file_usage, EntityTypeManagerInterface $entity_type_manager, FileSystemInterface $file_system, ConfigFactoryInterface $config_factory, AccountProxyInterface $current_user, EventDispatcherInterface $event_dispatcher) {
+    $this->entityFieldManager = $entity_field_manager;
+    $this->token = $token;
+    $this->fileUsage = $file_usage;
+    $this->entityTypeManager = $entity_type_manager;
+    $this->fileSystem = $file_system;
+    $this->config = $config_factory->get('tus.settings');
+    $this->tusCacheDir = $this->config->get('cache_dir');
+    $this->currentUser = $current_user;
+    $this->eventDispatcher = $event_dispatcher;
 
+    if (!$this->fileSystem->prepareDirectory($this->tusCacheDir, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS)) {
+      throw new HttpException(500, sprintf('TUS cache folder "%s" is not writable.', $this->tusCacheDir));
+    }
   }
 
   /**
+   * {@inheritdoc}
+   */
+  public static function create(ContainerInterface $container) {
+    return new static(
+      $container->get('entity_field.manager'),
+      $container->get('token'),
+      $container->get('file.usage'),
+      $container->get('entity_type.manager'),
+      $container->get('file_system'),
+      $container->get('config.factory'),
+      $container->get('current_user'),
+      $container->get('event_dispatcher')
+    );
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function getServer(string $upload_key = '', array $post_data = []): Server {
+    $server = $this->getTusServer($upload_key);
+
+    // These methods won't pass metadata about the file, and don't need
+    // file directory, because they are reading from TUS cache, so we
+    // can return the server now.
+    $request_method = strtoupper($server->getRequest()->method());
+    if (in_array($request_method, ['GET', 'HEAD', 'PATCH'], TRUE)) {
+      return $server;
+    }
+
+    // Get upload key for directory creation. On POST, it isn't passed, but
+    // we need to add the UUID to file directory to ensure we don't
+    // concatenate same-file uploads if client key is lost.
+    if ($request_method === 'POST') {
+      $upload_key = $server->getUploadKey();
+    }
+
+    // Get the file destination.
+    $destination = $this->determineDestination($upload_key, $post_data);
+    // Set the upload directory for TUS.
+    $server->setUploadDir($destination);
+
+    return $server;
+  }
+
+  /**
+   * Get a configured instance of Tus Server.
+   *
+   * @param string $upload_key
+   *   Upload key from tus if available.
+   *
+   * @return \TusPhp\Tus\Server
+   *   Configured instance of Tus server
+   *
+   * @throws \ReflectionException
+   */
+  protected function getTusServer(string $upload_key = ''): Server {
+    // Set TUS config cache directory.
+    Config::set([
+      'file' => [
+        'dir' => $this->fileSystem->realpath($this->tusCacheDir) . '/',
+        // Prefix the file with a '.' for added security as most web servers
+        // won't grant access to files beginning with a dot.
+        'name' => '.tus.cache',
+      ],
+    ]);
+
+    // Initialize TUS server.
+    $server = new Server();
+    $server->setApiPath('/tus/upload');
+
+    // Convert the max upload size from MB to bytes for tus.
+    $server->setMaxUploadSize((int)$this->config->get('max_upload_size') * 1048576);
+
+    if ($upload_key) {
+      $server->setUploadKey($upload_key);
+    }
+
+    $server->event()->addListener('tus-server.upload.complete', [$this, 'uploadComplete']);
+
+    return $server;
+  }
+
+  /**
+   * Determine Drupal URI.
+   *
    * Determine the Drupal URI for a file based on TUS upload key and meta params
    * from the upload client.
    *
-   * @param string $uploadKey
+   * @param string $upload_key
    *   The TUS upload key.
-   * @param array $fieldInfo
+   * @param array $field_info
    *   Params about the entity type, bundle, and field_name.
    *
    * @return string
    *   The intended destination uri for the file.
    */
-  public function determineDestination($uploadKey, $fieldInfo = []) {
-    $destination = '';
+  protected function determineDestination(string $upload_key, array $field_info): string {
     // If fieldInfo was not passed, we cannot determine file path.
-    if (empty($fieldInfo)) {
+    if (empty($field_info)) {
       throw new HttpException(500, 'Destination file path unknown because field info not sent in client meta.');
     }
 
-    // Determine TUS uploadDir.
-    $bundleFields = \Drupal::getContainer()->get('entity_field.manager')
-      ->getFieldDefinitions($fieldInfo['entityType'], $fieldInfo['entityBundle']);
-    $fieldDefinition = $bundleFields[$fieldInfo['fieldName']];
-    // Get the field's configured destination directory.
-    $filePath = trim(\Drupal::service('token')->replace($fieldDefinition->getSetting('file_directory')), '/');
-    $destination = $fieldDefinition->getSetting('uri_scheme') . '://';
-    $destination .= $filePath;
+    $destination = '';
+    $bundle_fields = $this->entityFieldManager
+      ->getFieldDefinitions($field_info['entityType'], $field_info['entityBundle']);
+    $field_definition = $bundle_fields[$field_info['fieldName']];
 
-    // Add the UploadKey to destination.
-    $destination .= '/' . $uploadKey;
+    // Get the field's configured destination directory.
+    $file_path = trim($this->token->replace($field_definition->getSetting('file_directory')), '/');
+    $destination = $field_definition->getSetting('uri_scheme') . '://' . $file_path . '/' . $upload_key;
 
     // Ensure directory creation.
-    if (!file_prepare_directory($destination, FILE_CREATE_DIRECTORY)) {
+    if (!$this->fileSystem->prepareDirectory($destination, FileSystemInterface::CREATE_DIRECTORY | FileSystemInterface::MODIFY_PERMISSIONS)) {
       throw new HttpException(500, 'Destination file path:' . $destination . ' is not writable.');
     }
 
@@ -58,169 +228,54 @@ class TusServer implements TusServerInterface {
   }
 
   /**
-   * Configure and return TusServer instance.
-   *
-   * @param string $uploadKey
-   *   UUID for the file being uploaded.
-   *
-   * @return TusServer
+   * {@inheritdoc}
    */
-  public function getServer($uploadKey = '', $postData = []) {
-    // Ensure TUS cache directory exists.
-    $tusCacheDir = 'private://tus';
-    if (!file_prepare_directory($tusCacheDir, FILE_CREATE_DIRECTORY)) {
-      throw new HttpException(500, 'TUS cache folder "private://tus" is not writable.');
+  public function uploadComplete(TusEvent $event): void {
+    $tus_file = $event->getFile();
+    $file_name = $tus_file->getName();
+    $file_path = $tus_file->getFilePath();
+    $metadata = $tus_file->details()['metadata'];
+
+    // Double check the uploaded file is supported for this field.
+    $bundle_fields = $this->entityFieldManager
+      ->getFieldDefinitions($metadata['entityType'], $metadata['entityBundle']);
+    $field_definition = $bundle_fields[$metadata['fieldName']];
+
+    // Check the uploaded file type is permitted by field.
+    $allowed_extensions = explode(' ', $field_definition->getSettings()['file_extensions']);
+    $file_type = explode('/', $metadata['filetype']);
+    $file_type = end($file_type);
+
+    if (!in_array($file_type, $allowed_extensions, TRUE)) {
+      throw new UnprocessableEntityHttpException(sprintf('File type "%s" is not supported for this field.', $file_type));
     }
-    // Set TUS config cache directory.
-    \TusPhp\Config::set([
-      'file' => [
-        'dir' => drupal_realpath('private://tus') . '/',
-        'name' => 'tus_php.cache',
-      ]
+
+    // Check if the file already exists.
+    $file_query = $this->entityTypeManager->getStorage('file')->getQuery();
+    $file_query->condition('uri', $file_path);
+    $results = $file_query->execute();
+
+    if (!empty($results)) {
+      // File already exists, just add usage.
+      $file = reset($results);
+      $this->fileUsage->add($file, 'tus', 'file', $file->id());
+      return;
+    }
+
+    /** @var \Drupal\file\FileInterface $file */
+    $file = File::create([
+      'uid' => $this->currentUser->id(),
+      'filename' => $file_name,
+      'uri' => $file_path,
+      'filemime' => mime_content_type($file_path),
+      'filesize' => filesize($file_path),
     ]);
+    $file->save();
+    $this->fileUsage->add($file, 'tus', 'file', $file->id());
 
-    // Initialize TUS server.
-    $server = new TusPhp();
-    $server->setApiPath('/tus/upload');
-
-    // Set uploadKey if passed.
-    if (!empty($uploadKey)) {
-      $server->setUploadKey($uploadKey);
-    }
-
-    // These methods won't pass metadata about the file, and don't need
-    // file directory, because they are reading from TUS cache, so we
-    // can return the server now.
-    $requestMethod = strtolower($server->getRequest()->method());
-    $fastReturnMethods = [
-      'get',
-      'head',
-      'patch',
-    ];
-    if (in_array($requestMethod, $fastReturnMethods)) {
-      return $server;
-    }
-
-    // Get uploadKey for directory creation. On POST, it isn't passed, but
-    // we need to add the UUID to file directory to ensure we don't
-    // concatenate same-file uploads if client key is lost.
-    if ($requestMethod == 'post') {
-      $uploadKey = $server->getUploadKey();
-    }
-
-    // Get the file destination.
-    $destination = $this->determineDestination($uploadKey, $postData);
-    // Set the upload directory for TUS.
-    $server->setUploadDir(drupal_realpath($destination));
-
-    return $server;
-  }
-
-  /**
-   * Create the file in Drupal and send response.
-   *
-   * @param array  $postData
-   *   Array of file details from TUS client.
-   *
-   * @return array
-   *   The created file details.
-   */
-  public function uploadComplete($postData = []) {
-    // If no post data, we can't proceed.
-    if (empty($postData['file'])) {
-      throw new HttpException(500, 'TUS uploadComplete did not receive file info.');
-    }
-    $fileExists = $fileEntityExists = $addUsage = FALSE;
-    $fileUsage = \Drupal::service('file.usage');
-
-    // Get UploadKey from Uppy response.
-    $uploadUrlArray = explode('/', $postData['response']['uploadURL']);
-    $uploadKey = array_pop($uploadUrlArray);
-
-    // Get file destination.
-    $destination = $this->determineDestination($uploadKey, $postData['file']['meta']);
-    $fileName = $postData['file']['name'];
-    $fileUri = $destination . '/' .  $fileName;
-
-    // Check if the file already exists.  Re-use the existing entity if so.
-    // We can do this because even if the filenames are the same on 2 different
-    // files, the checksum performed by TUS will cause a new uploadKey, and
-    // therefor a new folder and file entity entry.
-    if (file_exists(drupal_realpath($fileUri))) {
-      $fileExists = TRUE;
-    }
-
-    // Check if we have a file_managed record for the file anywhere.
-    $fileStorage = \Drupal::entityTypeManager()->getStorage('file');
-    $fileQuery = $fileStorage->getQuery();
-
-    // If the current path for this file already exists, we have exact match.
-    if ($fileExists) {
-      $fileQuery->condition('uri', $fileUri);
-    }
-    else {
-      // We can look for this TUS-uuid + filename for the existence of this
-      // file, possibly uploaded for a different field.
-      $fileQuery->condition('uri', "%{$uploadKey}/{$fileName}", 'LIKE');
-      $addUsage = TRUE;
-    }
-
-    $fileCheck = $fileQuery->execute();
-    // If we found the file in database.
-    if (!empty($fileCheck)) {
-      $file = $fileStorage->load(reset($fileCheck));
-      // Mark that the file exists, so we can re-use the entity.
-      $fileEntityExists = TRUE;
-      // Check if this file URI truly exists in path.
-      if (file_exists(drupal_realpath($file->getFileUri()))) {
-        $fileExists = TRUE;
-      }
-    }
-
-    // If the file didn't already exist, create the record now.
-    if ($fileExists && !$fileEntityExists) {
-      // Create the file entity.
-      $file = File::create([
-        'uid'      => \Drupal::currentUser()->id(),
-        'filename' => $fileName,
-        'uri'      => $fileUri,
-        'filemime' => $postData['file']['type'],
-        'filesize' => $postData['file']['size'],
-      ]);
-      $file->save();
-
-      // Create file_usage entry so the file isn't deleted before
-      // containing entity is saved.
-      // These entries are deleted in tus_cron if another file_usage is detected.
-      // e.g. once the file is assigned to an entity.
-      $fileUsage->add($file, 'tus', 'file', $file->id());
-    }
-    elseif (empty($file)) {
-      // Return error.
-      throw new HttpException(406, 'There was an issue uploading this file.');
-    }
-
-    if ($addUsage) {
-      // We need to record new usage, but we don't know the entity ID it is
-      // assigned to, so mark the entity type as module, because 'tus' will be
-      // removed in tus_cron. Leave 'file' as the object so that the link in
-      // file admin list is valid.
-      $fileUsage->add($file, $postData['file']['meta']['entityType'], 'file', $file->id());
-    }
-
-    // Return a useful result payload for front end clients.
-    $result = [
-      'fid' => $file->id(),
-      'uuid' => $file->uuid(),
-      'mimetype' => $file->getMimeType(),
-      'filename' => $file->getFilename(),
-      'path' => $file->url(),
-    ];
-
-    // Allow modules to alter the response payload.
-    \Drupal::moduleHandler()->alter('tus_upload_complete', $result, $file);
-
-    return $result;
+    // Dispatch an event for other modules to act on.
+    $event = new TusUploadCompleteEvent($file);
+    $this->eventDispatcher->dispatch(TusUploadCompleteEvent::EVENT_NAME, $event);
   }
 
 }

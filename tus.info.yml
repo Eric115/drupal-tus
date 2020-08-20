@@ -1,5 +1,5 @@
 name: 'TUS'
 type: module
 description: 'Integrate the TUS resumable upload protocol.'
-core: 8.x
+core_version_requirement: ^8.8 || ~9.0
 package: 'Media'

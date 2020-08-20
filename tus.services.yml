@@ -1,4 +1,4 @@
 services:
   tus.server:
     class: Drupal\tus\TusServer
-    arguments: []
+    arguments: ['@entity_field.manager', '@token', '@file.usage', '@entity_type.manager', '@file_system', '@config.factory', '@current_user', '@event_dispatcher']

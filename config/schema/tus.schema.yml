@@ -1,0 +1,10 @@
+tus.settings:
+  type: config_object
+  label: 'TUS config'
+  mapping:
+    cache_dir:
+      type: string
+      label: 'Cache directory'
+    max_upload_size:
+      type: integer
+      label: 'Max upload size'
